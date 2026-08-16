@@ -1,6 +1,6 @@
-# codex-skills
+# agent-skills
 
-Reusable Codex skills for development, release automation, research, and other workflows.
+Reusable agent skills for Codex, Grok, Claude, OpenCode, and other coding agents.
 
 ## Skills
 
@@ -28,7 +28,7 @@ mkdir -p .agents/skills
 cp -R <skill-name> .agents/skills/
 ```
 
-Then invoke it in Codex:
+Then invoke it in your agent:
 
 ```
 $<skill-name> <your request>
