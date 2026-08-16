@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# remotion-ads CLI. From a product repo: ad .
+set -e
+
+usage() {
+  cat <<'EOF'
+Usage: ad [target] [options]
+
+Create a cinematic Remotion product ad for a software project.
+
+  ad .
+  ad . --duration 15 --format vertical
+  ad . --strategy challenge
+  ad . --variants 3
+  ad . --concepts-only
+  ad . --no-render
+
+Options:
+  --duration <seconds>     Default: 15
+  --format <vertical|square|horizontal>
+                           Default: vertical (9:16, 1080x1920)
+  --strategy <name>        Force a strategy from the library
+  --variants <n>           Hook variants to produce (default: 3)
+  --campaign <slug>        Campaign directory name
+  --concepts-only          Stop after ranked concepts
+  --no-render              Implement but do not render
+  --agent <claude|codex|none>
+                           Which agent to invoke (default: auto)
+  --print-paths            Print resolved skill/studio paths
+  --inspect                Scan the product repo and print inventory JSON
+  --scaffold               Create campaign folders only
+  --render [id]            Render a studio composition
+  --still <id> <frame>     Render a still
+  --studio                 Open Remotion Studio
+  --install                Install CLI + agent skill links
+  -h, --help               Show this help
+
+The default invocation launches Claude Code or Codex with the remotion-ads
+skill. Helper flags (--print-paths, --inspect, --scaffold, --render) run
+locally without an agent.
+EOF
+}
+
+SELF="$0"
+while [ -L "$SELF" ]; do
+  DIR=$(cd "$(dirname "$SELF")" && pwd)
+  LINK=$(readlink "$SELF")
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *) SELF="$DIR/$LINK" ;;
+  esac
+done
+BIN_DIR=$(cd "$(dirname "$SELF")" && pwd)
+REPO_ROOT=$(cd "$BIN_DIR/.." && pwd)
+
+# shellcheck source=../shared/remotion-ads/scripts/lib.sh
+. "$REPO_ROOT/shared/remotion-ads/scripts/lib.sh"
+
+if ! HOME_DIR=$(agent_skills_resolve_home "$REPO_ROOT"); then
+  echo "error: could not locate agent-skills repo" >&2
+  echo "Set AGENT_SKILLS_HOME or run: $REPO_ROOT/scripts/install.sh" >&2
+  exit 1
+fi
+
+SKILL_SCRIPTS="$HOME_DIR/shared/remotion-ads/scripts"
+TARGET=""
+DURATION="15"
+FORMAT="vertical"
+STRATEGY=""
+VARIANTS="3"
+CAMPAIGN=""
+CONCEPTS_ONLY=0
+NO_RENDER=0
+AGENT="auto"
+MODE="run"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --print-paths) MODE="paths"; shift ;;
+    --inspect) MODE="inspect"; shift ;;
+    --scaffold) MODE="scaffold"; shift ;;
+    --render) MODE="render"; shift; RENDER_ID="${1:-}"; [ -n "$1" ] && shift || true ;;
+    --still) MODE="still"; shift; STILL_ID="${1:-}"; STILL_FRAME="${2:-0}"; shift || true; shift || true ;;
+    --studio) MODE="studio"; shift ;;
+    --install) MODE="install"; shift ;;
+    --duration) DURATION="$2"; shift 2 ;;
+    --format) FORMAT="$2"; shift 2 ;;
+    --strategy) STRATEGY="$2"; shift 2 ;;
+    --variants) VARIANTS="$2"; shift 2 ;;
+    --campaign) CAMPAIGN="$2"; shift 2 ;;
+    --concepts-only) CONCEPTS_ONLY=1; shift ;;
+    --no-render) NO_RENDER=1; shift ;;
+    --agent) AGENT="$2"; shift 2 ;;
+    --) shift; break ;;
+    -*)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [ -z "$TARGET" ]; then
+        TARGET="$1"
+      else
+        echo "unexpected argument: $1" >&2
+        exit 2
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$TARGET" ]; then
+  TARGET="."
+fi
+
+if [ -d "$TARGET" ]; then
+  TARGET=$(cd "$TARGET" && pwd)
+fi
+
+case "$MODE" in
+  paths)
+    agent_skills_emit_paths "$HOME_DIR"
+    printf 'PRODUCT_ROOT=%s\n' "$TARGET"
+    exit 0
+    ;;
+  inspect)
+    exec "$SKILL_SCRIPTS/inspect.sh" "$TARGET"
+    ;;
+  scaffold)
+    set -- --product "$TARGET" --duration "$DURATION" --format "$FORMAT"
+    [ -n "$CAMPAIGN" ] && set -- "$@" --campaign "$CAMPAIGN"
+    [ -n "$STRATEGY" ] && set -- "$@" --strategy "$STRATEGY"
+    exec "$SKILL_SCRIPTS/new-campaign.sh" "$@"
+    ;;
+  render)
+    [ -n "$RENDER_ID" ] || { echo "error: --render needs a composition id" >&2; exit 2; }
+    exec "$SKILL_SCRIPTS/render.sh" --id "$RENDER_ID"
+    ;;
+  still)
+    [ -n "$STILL_ID" ] || { echo "error: --still needs a composition id" >&2; exit 2; }
+    exec "$SKILL_SCRIPTS/render.sh" --id "$STILL_ID" --still "$STILL_FRAME"
+    ;;
+  studio)
+    if [ ! -d "$HOME_DIR/ad-studio/node_modules/remotion" ]; then
+      (cd "$HOME_DIR/ad-studio" && npm install)
+    fi
+    cd "$HOME_DIR/ad-studio"
+    exec npx remotion studio src/index.ts
+    ;;
+  install)
+    exec "$HOME_DIR/scripts/install.sh"
+    ;;
+esac
+
+# Full workflow: launch an agent unless --agent none.
+if [ "$AGENT" = "auto" ]; then
+  if command -v claude >/dev/null 2>&1; then
+    AGENT="claude"
+  elif command -v codex >/dev/null 2>&1; then
+    AGENT="codex"
+  else
+    AGENT="none"
+  fi
+fi
+
+ARGS=""
+[ "$DURATION" != "15" ] && ARGS="$ARGS --duration $DURATION"
+[ "$FORMAT" != "vertical" ] && ARGS="$ARGS --format $FORMAT"
+[ -n "$STRATEGY" ] && ARGS="$ARGS --strategy $STRATEGY"
+[ "$VARIANTS" != "3" ] && ARGS="$ARGS --variants $VARIANTS"
+[ -n "$CAMPAIGN" ] && ARGS="$ARGS --campaign $CAMPAIGN"
+[ "$CONCEPTS_ONLY" -eq 1 ] && ARGS="$ARGS --concepts-only"
+[ "$NO_RENDER" -eq 1 ] && ARGS="$ARGS --no-render"
+
+PROMPT="Use the remotion-ads skill. Create a cinematic product advertisement for the repository at $TARGET. Defaults unless overridden: 15s, 9:16, performance social ad, one primary concept, three hook variants. Resolve resources with: $HOME_DIR/bin/ad --print-paths. Read $HOME_DIR/shared/remotion-ads/SKILL.md and follow every phase. Do not ask the user to paste strategy or critic files. Extra options:$ARGS"
+
+if [ "$AGENT" = "none" ]; then
+  echo "Agent launch skipped. Resolved paths:"
+  agent_skills_emit_paths "$HOME_DIR"
+  printf 'PRODUCT_ROOT=%s\n' "$TARGET"
+  echo
+  echo "Pass this prompt to Claude Code (/ad) or Codex (\$remotion-ads):"
+  echo
+  echo "$PROMPT"
+  exit 0
+fi
+
+cd "$TARGET"
+
+if [ "$AGENT" = "claude" ]; then
+  if [ -n "$ARGS" ]; then
+    exec claude "/ad $TARGET$ARGS"
+  else
+    exec claude "/ad $TARGET"
+  fi
+fi
+
+if [ "$AGENT" = "codex" ]; then
+  exec codex "$PROMPT"
+fi
+
+echo "error: unknown agent: $AGENT" >&2
+exit 2

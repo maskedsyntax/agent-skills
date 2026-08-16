@@ -1,0 +1,17 @@
+{
+  "campaign": "",
+  "product": "",
+  "product_root": "",
+  "created_at": "",
+  "duration_seconds": 15,
+  "format": "vertical",
+  "fps": 30,
+  "strategy": null,
+  "hero_hook": null,
+  "selected_concept": null,
+  "status": "scaffolded",
+  "composition_id": "",
+  "renders": [],
+  "variants": [],
+  "assumptions": []
+}
